@@ -21,19 +21,6 @@ public class RunModel : MonoBehaviour
     {
         runTimeModel = ModelLoader.Load(modelAsset);
         worker = WorkerFactory.CreateWorker(runTimeModel, WorkerFactory.Device.CPU);
-
-        truth.Add(new float[5] { 0, 0, 0, 0, 0 } );
-
-        truth.Add(new float[5] { 0, 0, 0, 0, 0 } );
-        truth.Add(new float[5] { 0, 0, 0, 0, 0 } );
-
-        truth.Add(new float[5] { 0, 0, 0, 0, 0 } );
-        truth.Add(new float[5] { 0, 0, 0, 0, 0 } );
-
-        truth.Add(new float[5] { 0, 0, 0, 0, 0 } );
-        truth.Add(new float[5] { 0, 0, 0, 0, 0 } );
-
-        Predict(input);
     }
 
     public void Predict(float[] rawInput)
@@ -45,14 +32,8 @@ public class RunModel : MonoBehaviour
         curPredictValue = output.AsFloats();
 
         int state = GetMaxIndex(curPredictValue);
-        float speed = 0.0f;
 
-        for(int i = 0; i < truth[state].Length; i++)
-        {
-            speed += truth[state][i] - dataList[15][i];
-        }
-
-        targetObject.ChangeMove((MoveState)state, speed);
+        targetObject.ChangeMove((MoveState)state);
 
         input.Dispose();
         output.Dispose();
@@ -78,14 +59,17 @@ public class RunModel : MonoBehaviour
 
     void OnMessageArrived(string msg)
     {
-        Debug.Log("Recive Message : " + msg);
+        //Debug.Log("Recive Message : " + msg);
 
         string[] text = msg.Split(' ');
         float[] data = new float[text.Length];
 
-        for(int i = 0;i < text.Length;i++)
+        float[] mean = { 0.44578253f, 0.73138337f, 0.46890912f, 0.37729042f, 0.26794667f };
+        float[] std = { 0.5255335f,  0.7421981f,  0.41341906f, 0.41430854f, 0.36469f };
+        for (int i = 0;i < text.Length;i++)
         {
             data[i] = float.Parse(text[i]);
+            data[i] = (data[i] - mean[i]) / std[i];
         }
 
         dataList.Add(data);
