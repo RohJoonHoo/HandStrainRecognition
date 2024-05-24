@@ -9,6 +9,8 @@ public class RunModel : MonoBehaviour
     public NNModel modelAsset;
     public float[] input;
 
+    [SerializeField] private float[] curPredictValue;
+    private List<float[]> dataList;
     private Model runTimeModel;
     private IWorker worker;
 
@@ -21,20 +23,11 @@ public class RunModel : MonoBehaviour
 
     public void Predict(float[] rawInput)
     {
-        var input = new Tensor(1, 1, 5, 16, rawInput);
+        var input = new Tensor(1, 1, 16, 5, rawInput);
 
         var output = worker.Execute(input).PeekOutput();
 
-        float[] data = output.AsFloats();
-
-        string res = "";
-
-        foreach (float d in data)
-        {
-            res += d.ToString() + " ";
-        }
-
-        Debug.Log(res);
+        curPredictValue = output.AsFloats();
 
         input.Dispose();
         output.Dispose();
@@ -47,7 +40,7 @@ public class RunModel : MonoBehaviour
 
     void OnMessageArrived(string msg)
     {
-        Debug.Log("Recive Message : " + msg);
+        //Debug.Log("Recive Message : " + msg);
 
         string[] text = msg.Split(' ');
         float[] data = new float[text.Length];
@@ -57,7 +50,22 @@ public class RunModel : MonoBehaviour
             data[i] = float.Parse(text[i]);
         }
 
-        Predict(data);
+        //dataList.Add(data);
+
+        //if (dataList.Count == 16)
+        //{
+        //    dataList.RemoveAt(0);
+
+        //    float[] dataArray = new float[dataList.Count * 5];
+        //    for (int i = 0;i < dataList.Count; i++)
+        //    {
+        //        for(int j = 0;j < 5; j++)
+        //        {
+        //            dataArray[i * 5 + j] = dataList[i][j];
+        //        }
+        //    }
+        //    Predict(dataArray);
+        //}
     }
 
     void OnConnectionEvent(bool success)
