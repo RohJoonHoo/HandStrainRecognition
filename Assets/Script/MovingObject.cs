@@ -67,9 +67,9 @@ public class MovingObject : MonoBehaviour
         //transform.position += moveDirection[moveState] * speed * Time.fixedDeltaTime;
     }
 
-    public void ChangeMoveDirection(Tensor tensor)
+    public void ChangeMove(MoveState state, float speed)
     {
-        MoveState state = MoveState.Down;
         moveState = state;
+        this.speed = speed;
     }
 }

@@ -1,5 +1,7 @@
 using System.Collections;
 using System.Collections.Generic;
+using System.Drawing;
+using System.Linq;
 using Unity.Barracuda;
 using UnityEngine;
 
@@ -10,7 +12,8 @@ public class RunModel : MonoBehaviour
     public float[] input;
 
     [SerializeField] private float[] curPredictValue;
-    private List<float[]> dataList;
+    private List<float[]> dataList = new List<float[]>();
+    private List<float[]> truth = new List<float[]>();
     private Model runTimeModel;
     private IWorker worker;
 
@@ -18,6 +21,18 @@ public class RunModel : MonoBehaviour
     {
         runTimeModel = ModelLoader.Load(modelAsset);
         worker = WorkerFactory.CreateWorker(runTimeModel, WorkerFactory.Device.CPU);
+
+        truth.Add(new float[5] { 0, 0, 0, 0, 0 } );
+
+        truth.Add(new float[5] { 0, 0, 0, 0, 0 } );
+        truth.Add(new float[5] { 0, 0, 0, 0, 0 } );
+
+        truth.Add(new float[5] { 0, 0, 0, 0, 0 } );
+        truth.Add(new float[5] { 0, 0, 0, 0, 0 } );
+
+        truth.Add(new float[5] { 0, 0, 0, 0, 0 } );
+        truth.Add(new float[5] { 0, 0, 0, 0, 0 } );
+
         Predict(input);
     }
 
@@ -29,8 +44,31 @@ public class RunModel : MonoBehaviour
 
         curPredictValue = output.AsFloats();
 
+        int state = GetMaxIndex(curPredictValue);
+        float speed = 0.0f;
+
+        for(int i = 0; i < truth[state].Length; i++)
+        {
+            speed += truth[state][i] - dataList[15][i];
+        }
+
+        targetObject.ChangeMove((MoveState)state, speed);
+
         input.Dispose();
         output.Dispose();
+    }
+
+    private int GetMaxIndex(float[] array)
+    {
+        float max = array.Max();
+
+        for (int i = 0;i < array.Length;i++)
+        {
+            if (max == array[i])
+                return i;
+        }
+
+        return -1;
     }
 
     private void OnDestroy()
@@ -40,7 +78,7 @@ public class RunModel : MonoBehaviour
 
     void OnMessageArrived(string msg)
     {
-        //Debug.Log("Recive Message : " + msg);
+        Debug.Log("Recive Message : " + msg);
 
         string[] text = msg.Split(' ');
         float[] data = new float[text.Length];
@@ -50,22 +88,22 @@ public class RunModel : MonoBehaviour
             data[i] = float.Parse(text[i]);
         }
 
-        //dataList.Add(data);
+        dataList.Add(data);
 
-        //if (dataList.Count == 16)
-        //{
-        //    dataList.RemoveAt(0);
+        if (dataList.Count == 16)
+        {
+            float[] dataArray = new float[dataList.Count * 5];
+            for (int i = 0; i < dataList.Count; i++)
+            {
+                for (int j = 0; j < 5; j++)
+                {
+                    dataArray[i * 5 + j] = dataList[i][j];
+                }
+            }
+            Predict(dataArray);
 
-        //    float[] dataArray = new float[dataList.Count * 5];
-        //    for (int i = 0;i < dataList.Count; i++)
-        //    {
-        //        for(int j = 0;j < 5; j++)
-        //        {
-        //            dataArray[i * 5 + j] = dataList[i][j];
-        //        }
-        //    }
-        //    Predict(dataArray);
-        //}
+            dataList.RemoveAt(0);
+        }
     }
 
     void OnConnectionEvent(bool success)
