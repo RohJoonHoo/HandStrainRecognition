@@ -9,11 +9,9 @@ public class RunModel : MonoBehaviour
 {
     public MovingObject targetObject;
     public NNModel modelAsset;
-    public float[] input;
 
     [SerializeField] private float[] curPredictValue;
     private List<float[]> dataList = new List<float[]>();
-    private List<float[]> truth = new List<float[]>();
     private Model runTimeModel;
     private IWorker worker;
 
@@ -25,7 +23,7 @@ public class RunModel : MonoBehaviour
 
     public void Predict(float[] rawInput)
     {
-        var input = new Tensor(1, 1, 16, 5, rawInput);
+        var input = new Tensor(1, 16, 5, 1, rawInput);
 
         var output = worker.Execute(input).PeekOutput();
 
