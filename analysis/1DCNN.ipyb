@@ -1,0 +1,245 @@
+import os
+import pandas as pd
+import numpy as np
+import torch
+from torch.utils.data import Dataset
+import torch.nn as nn
+from torch.nn import Module, Sequential
+from sklearn.metrics import confusion_matrix
+import seaborn as sn
+import pandas as pd
+import matplotlib.pyplot as plt
+from torch.utils.data import DataLoader, random_split
+from torch.nn import CrossEntropyLoss
+from torch.optim import Adam
+from torcheval.metrics.classification.recall import MulticlassRecall
+from torcheval.metrics.classification.accuracy import MulticlassAccuracy
+from torcheval.metrics.classification.precision import MulticlassPrecision
+from torcheval.metrics.classification.f1_score import MulticlassF1Score
+from tqdm import tqdm
+from torch.utils.tensorboard import SummaryWriter
+import torch.onnx as onnx
+from google.colab import drive
+
+ADDRESS = # data_address
+DRIVE = # drive_address
+
+class2num = {'back': 0, 'default': 1, 'down': 2, 'front': 3, 'left': 4, 'right': 5, 'up': 6}
+im = np.eye(7)
+print(im.shape)
+
+class MyDataset(Dataset):
+    def __init__(self, path: str = 'ADDRESS', frame_length: int = 32):
+        # 파일 이름 배열
+        self.filenames = []
+        # 파일 카테고리
+        self.category = []
+        # 학습 데이터
+        self.data = np.ndarray([0, frame_length, 5])
+        # 타겟 라벨
+        self.label = np.ndarray([0, 7])
+        # 파일 경로 로딩
+        for dirname, _, filenames in os.walk(path):
+            if len(filenames) == 0: continue
+
+            _, category = os.path.split(dirname)
+            self.filenames += [os.path.join(dirname, filename) for filename in filenames]
+            self.category += [category] * len(filenames)
+
+        # csv 로딩
+        for idx, file in enumerate(self.filenames):
+
+            frame = pd.read_csv(file)
+
+            frame = frame[['thumb', 'index', 'middle', 'ring', 'little']].to_numpy()
+
+            frame = np.pad(frame, ((0, 200), (0, 0)), mode='edge')
+
+            batch = []
+            for i in range(40, 168 - frame_length):
+                batch += [frame[i: i + frame_length]]
+            # TODO: 프레임 1마다 한 주기씩 만들기
+            batch = np.asarray(batch)
+            self.data = np.append(self.data, batch, axis=0)
+            self.label = np.append(self.label, [im[class2num[self.category[idx]]]] * len(batch), axis=0)
+
+        print(self.data.shape, self.label.shape)
+
+        # 정규화
+        mean = self.data.mean(axis=(0, 1))
+        std = self.data.std(axis=(0, 1))
+        print(mean, std)
+        self.data = (self.data - mean) / std
+        print(self.data.shape)
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        x = torch.FloatTensor(self.data[idx])
+        y = torch.FloatTensor(self.label[idx])
+        return x, y
+
+MyDataset(frame_length=16)
+
+class MyModel(Module):
+    def __init__(self, filter_size: int = 8, frame_length: int = 8):
+        super(MyModel, self).__init__()
+
+        self.layer_1 = Sequential(*[
+            nn.Conv1d(5, filter_size, 3, padding=1),
+            nn.BatchNorm1d(filter_size),
+            nn.ReLU(),
+            nn.MaxPool1d(2)
+        ])
+
+        self.layer_2 = Sequential(*[
+            nn.Conv1d(filter_size, 2 * filter_size, 3, padding=1),
+            nn.BatchNorm1d(2 * filter_size),
+            nn.ReLU(),
+            nn.MaxPool1d(2)
+        ])
+
+        self.fc = Sequential(*[
+            nn.Flatten(),
+            nn.Linear(int((frame_length * filter_size) / 2), 7),
+            nn.Sigmoid(),
+            nn.Softmax(dim=1)
+        ])
+
+        self.drop = nn.Dropout()
+
+
+    def forward(self, input: torch.FloatTensor):
+        out_1 = self.layer_1(input.permute([0, 2, 1]))
+        out_2 = self.layer_2(
+            self.drop(out_1) if self.training else out_1
+        )
+
+        return self.fc(out_2)
+
+def createConfusionMatrix(pred, target):
+    pred = pred.cpu().numpy()
+    target = target.cpu().numpy()
+    # constant for classes
+    classes = ('back','default','down','front','left','right','up')
+
+    # Build confusion matrix
+    cf_matrix = confusion_matrix(target, pred)
+    df_cm = pd.DataFrame(cf_matrix / np.sum(cf_matrix, axis=1)[:, None], index=[i for i in classes],
+                         columns=[i for i in classes])
+
+    plt.figure(figsize=(7, 7))
+
+    heatmap = sn.heatmap(df_cm, annot=True, cmap='Blues')
+    heatmap.set_xticklabels(heatmap.get_xticklabels(), rotation=45, horizontalalignment='right')
+    heatmap.set_yticklabels(heatmap.get_yticklabels(), rotation=0)
+
+    plt.xlabel('Predicted')
+    plt.ylabel('True')
+
+    return heatmap.get_figure()
+
+def train(epoch: int = 3000, frame_length: int = 32, filter_size: int = 8, path: str = 'ADDRESS'):
+    with torch.device('cuda' if torch.cuda.is_available() else 'cpu') as device:
+
+        model = MyModel(filter_size=filter_size, frame_length=frame_length).to(device)
+        loss_fn = CrossEntropyLoss().to(device)
+        optimizer = Adam(model.parameters())
+        writer = SummaryWriter(f'runs/model_{frame_length}_{filter_size}')
+
+        dataset = MyDataset(path=path, frame_length=frame_length)
+        dataset_length = len(dataset)
+        train_length = int(dataset_length * 0.8)
+        test_length = int(dataset_length * 0.1)
+        valid_length = dataset_length - train_length - test_length
+        train_dataset, test_dataset, validation_dataset = random_split(dataset, [train_length, test_length, valid_length], generator=torch.Generator(device))
+
+        train_loader = DataLoader(train_dataset, batch_size=4096, shuffle=True, generator=torch.Generator(device))
+        test_loader = DataLoader(test_dataset, batch_size=256, shuffle=True, generator=torch.Generator(device))
+        valid_loader = DataLoader(validation_dataset, batch_size=256, shuffle=True, generator=torch.Generator(device))
+
+        print(train_length)
+        print(test_length)
+        print(valid_length)
+
+        accuracy_ = MulticlassAccuracy(num_classes=7, average=None, device=device)
+        recall_ = MulticlassRecall(num_classes=7, average=None, device=device)
+        precision_ = MulticlassPrecision(num_classes=7, average=None, device=device)
+        f1_score_ =  MulticlassF1Score(num_classes=7, average=None, device=device)
+
+        for step in tqdm(range(0, epoch)):
+            for ((train_data, train_label), (valid_data, valid_label)) in zip(train_loader, valid_loader):
+                train_data= train_data.to(device)
+                train_label = train_label.to(device)
+                valid_data = valid_data.to(device)
+                valid_label = valid_label.to(device)
+
+                model.train(True)
+                optimizer.zero_grad()
+                train_output = model(train_data)
+                loss = loss_fn(train_output, train_label)
+
+                loss.backward()
+                optimizer.step()
+
+                with torch.no_grad():
+                    model.train(False)
+                    valid_output = model(valid_data)
+                    valid_loss = loss_fn(valid_output, valid_label)
+                    pred = valid_output.argmax(dim=1)
+                    target = valid_label.argmax(dim=1)
+                    accuracy = torch.sum(pred == target) / pred.shape[0]
+
+                    if (step % 25 == 0) :
+                        writer.add_scalar(tag='train_loss', scalar_value=loss, global_step=step)
+                        writer.add_scalar(tag='valid_loss', scalar_value=valid_loss, global_step=step)
+                        writer.add_scalar(tag='accuracy', scalar_value=accuracy, global_step=step)
+                        accuracy_compute = accuracy_.reset().update(pred, target).compute()
+                        recall_compute = recall_.reset().update(pred, target).compute()
+                        f1_score_compute = f1_score_.reset().update(pred, target).compute()
+
+                        writer.add_scalars(main_tag='accuracy_class', tag_scalar_dict={key: accuracy_compute[val] for (key, val) in class2num.items()}, global_step=step)
+                        writer.add_scalars(main_tag='recall', tag_scalar_dict={key: recall_compute[val] for (key, val) in class2num.items()}, global_step=step)
+                        writer.add_scalars(main_tag='f1_score', tag_scalar_dict={key: f1_score_compute[val] for (key, val) in class2num.items()}, global_step=step)
+
+                        writer.add_figure(tag='confusion_matrix', figure=createConfusionMatrix(pred, target), global_step=step)
+
+        model.train(False)
+        accuracy_.reset()
+        recall_.reset()
+        f1_score_.reset()
+        for (test_data, test_label) in test_loader:
+            with torch.no_grad():
+                test_data = test_data.to(device)
+                test_label = test_label.to(device)
+                test_output = model(test_data)
+                valid_loss = loss_fn(test_output, test_label)
+                pred = test_output.argmax(dim=1)
+                target = test_label.argmax(dim=1)
+
+                accuracy_compute = accuracy_.update(pred, target).compute()
+                recall_compute = recall_.update(pred, target).compute()
+                f1_score_compute = f1_score_.update(pred, target).compute()
+        writer.add_scalars(main_tag='accuracy_test', tag_scalar_dict={key: accuracy_compute[val] for (key, val) in class2num.items()}, global_step=step)
+        writer.add_scalars(main_tag='recall_test', tag_scalar_dict={key: recall_compute[val] for (key, val) in class2num.items()}, global_step=step)
+        writer.add_scalars(main_tag='f1_score_test', tag_scalar_dict={key: f1_score_compute[val] for (key, val) in class2num.items()}, global_step=step)
+
+        torch.save(model, 'model.pt')
+        onnx.export(
+            model=model.to(),
+            args=torch.randn(size=[1, frame_length, 5], device=device),
+            f=f'classifier_{frame_length}_{filter_size}_v3.onnx',
+            export_params=True,
+            do_constant_folding=True,
+            input_names=['input'],
+            output_names=['output'],
+
+        )
+
+drive.mount('DRIVE')
+
+train(1500, 16, 8)
+
+%load_ext tensorboard
+%tensorboard --logdir=runs
